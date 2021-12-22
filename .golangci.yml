@@ -1,0 +1,23 @@
+run:
+  build-tags:
+    - codeanalysis
+
+issues:
+  max-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  enable:
+    - dogsled
+    - dupl
+    - errorlint
+    - goconst
+    - gocritic
+    - gofmt
+    - gofumpt
+    - gosec
+    - misspell
+    - nilerr
+    - nlreturn
+    - wastedassign
+    - whitespace

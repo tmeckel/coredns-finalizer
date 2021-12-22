@@ -82,7 +82,7 @@ In this configuration, we forward all queries to 9.9.9.9 and resolve CNAMES with
 
 ```corefile
 . {
-  whoami
+  forward . 9.9.9.9
   finalize max_depth 1
 }
 ```

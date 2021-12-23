@@ -33,38 +33,73 @@ func New() *Finalize {
 
 // ServeDNS implements the plugin.Handler interface.
 func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-	state := request.Request{W: w, Req: r}
+	log.Debug("Configuring response modifier")
 
-	if r.Answer != nil && len(r.Answer) > 0 && r.Answer[0].Header().Rrtype == dns.TypeCNAME {
-		requestCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
+	mw := NewResponseModifier(ctx, s, w)
 
-		defer recordDuration(ctx, time.Now())
+	return plugin.NextOrFailure(s.Name(), s.Next, ctx, mw, r)
+}
+
+// Name implements the Handler interface.
+func (al *Finalize) Name() string { return "finalize" }
+
+func recordDuration(ctx context.Context, start time.Time) {
+	requestDuration.WithLabelValues(metrics.WithServer(ctx)).
+		Observe(time.Since(start).Seconds())
+}
+
+type ResponseModifier struct {
+	dns.ResponseWriter
+	ctx    context.Context
+	plugin *Finalize
+}
+
+// Returns a dns.Msg modifier that replaces CNAME on root zones with other records.
+func NewResponseModifier(ctx context.Context, plugin *Finalize, w dns.ResponseWriter) *ResponseModifier {
+	return &ResponseModifier{
+		ResponseWriter: w,
+		ctx:            ctx,
+		plugin:         plugin,
+	}
+}
+
+// WriteMsg records the status code and calls the
+// underlying ResponseWriter's WriteMsg method.
+func (r *ResponseModifier) WriteMsg(res *dns.Msg) error {
+	state := request.Request{W: r.ResponseWriter, Req: res}
+
+	log.Debugf("Finalizing CNAME for request: %+v", res)
+
+	if res.Answer != nil && len(res.Answer) > 0 && res.Answer[0].Header().Rrtype == dns.TypeCNAME {
+		requestCount.WithLabelValues(metrics.WithServer(r.ctx)).Inc()
+
+		defer recordDuration(r.ctx, time.Now())
 
 		// emulate hashset in go; https://emersion.fr/blog/2017/sets-in-go/
 		cnameVisited := make(map[string]struct{})
 		cnt := 0
-		rr := r.Answer[0]
+		rr := res.Answer[0]
 
-	refinalizeCname:
+	resolveCname:
 		log.Debugf("Trying to resolve CNAME [%+v] via upstream", rr)
 
-		if s.maxDepth > 0 && cnt >= s.maxDepth {
-			maxDepthReachedCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
+		if r.plugin.maxDepth > 0 && cnt >= r.plugin.maxDepth {
+			maxDepthReachedCount.WithLabelValues(metrics.WithServer(r.ctx)).Inc()
 
-			log.Errorf("Max depth %d reached for resolving CNAME records", s.maxDepth)
+			log.Errorf("Max depth %d reached for resolving CNAME records", r.plugin.maxDepth)
 		} else if _, ok := cnameVisited[rr.(*dns.CNAME).Target]; ok {
-			circularReferenceCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
+			circularReferenceCount.WithLabelValues(metrics.WithServer(r.ctx)).Inc()
 
 			log.Errorf("Detected circular reference in CNAME chain. CNAME [%s] already processed", rr.(*dns.CNAME).Target)
 		} else {
-			up, err := s.upstream.Lookup(ctx, state, rr.(*dns.CNAME).Target, state.QType())
+			up, err := r.plugin.upstream.Lookup(r.ctx, state, rr.(*dns.CNAME).Target, state.QType())
 			if err != nil {
-				upstreamErrorCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
+				upstreamErrorCount.WithLabelValues(metrics.WithServer(r.ctx)).Inc()
 
 				log.Errorf("Failed to lookup CNAME [%+v] from upstream: [%+v]", rr, err)
 			} else {
 				if up.Answer == nil || len(up.Answer) == 0 {
-					danglingCNameCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
+					danglingCNameCount.WithLabelValues(metrics.WithServer(r.ctx)).Inc()
 
 					log.Errorf("Received no answer from upstream: [%+v]", up)
 				} else {
@@ -74,12 +109,12 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 						cnt++
 						cnameVisited[up.Question[0].Name] = struct{}{}
 
-						goto refinalizeCname
+						goto resolveCname
 					case dns.TypeA:
 						fallthrough
 					case dns.TypeAAAA:
-						rr.Header().Name = r.Answer[0].Header().Name
-						r.Answer = []dns.RR{
+						rr.Header().Name = res.Answer[0].Header().Name
+						res.Answer = []dns.RR{
 							rr,
 						}
 					default:
@@ -88,21 +123,22 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 				}
 			}
 		}
+	} else {
+		log.Debug("Request didn't contain any answer or no CNAME")
 	}
 
-	if s.Next != nil {
-		return plugin.NextOrFailure(state.Name(), s.Next, ctx, w, r)
-	}
-
-	err := w.WriteMsg(r)
-
-	return 0, err
+	return r.ResponseWriter.WriteMsg(res)
 }
 
-// Name implements the Handler interface.
-func (al *Finalize) Name() string { return "finalize" }
+// Write is a wrapper that records the size of the message that gets written.
+func (r *ResponseModifier) Write(buf []byte) (int, error) {
+	n, err := r.ResponseWriter.Write(buf)
 
-func recordDuration(ctx context.Context, start time.Time) {
-	requestDuration.WithLabelValues(metrics.WithServer(ctx)).
-		Observe(time.Since(start).Seconds())
+	return n, err
+}
+
+// Hijack implements dns.Hijacker. It simply wraps the underlying
+// ResponseWriter's Hijack method if there is one, or returns an error.
+func (r *ResponseModifier) Hijack() {
+	r.ResponseWriter.Hijack()
 }

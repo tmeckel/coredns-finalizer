@@ -25,6 +25,8 @@ func setup(c *caddy.Controller) error {
 		return finalize
 	})
 
+	log.Debug("Added plugin to server")
+
 	return nil
 }
 
@@ -54,6 +56,8 @@ func parse(c *caddy.Controller) (*Finalize, error) {
 			return nil, c.ArgErr()
 		}
 	}
+
+	log.Debug("Successfully parsed configuration")
 
 	return finalizePlugin, nil
 }

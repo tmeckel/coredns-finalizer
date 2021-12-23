@@ -2,15 +2,16 @@
 
 ## Name
 
-*finalize* - resolves CNAMEs after a query is handled.
+*finalize* - resolves CNAMEs to their IP address.
 
 ## Description
 
 The plugin will try to resolve CNAMEs and only return the resulting A or AAAA
 address. If no A or AAAA record can be resolved the original (first) answer will
-be returned to the client. Circular dependencies are detected and an error will
-be logged accordingly. In that case the original (first) answer will be returned
-to the client as well.
+be returned to the client.
+
+Circular dependencies are detected and an error will be logged accordingly. In
+that case the original (first) answer will be returned to the client as well.
 
 ## Compilation
 
@@ -60,6 +61,8 @@ If monitoring is enabled (via the *prometheus* directive) the following metrics 
 * `coredns_finalize_maxdepth_reached_count_total{server}` - count of incidents when max depth is reached while trying to resolve a CNAME.
 
 * `coredns_finalize_maxdepth_upstream_error_count_total{server}` - count of upstream errors received.
+
+* `coredns_finalize_request_duration_seconds{server}` - duration per CNAME resolve.
 
 The `server` label indicated which server handled the request.
 

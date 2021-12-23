@@ -2,6 +2,7 @@ package finalize
 
 import (
 	"context"
+	"time"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/metrics"
@@ -36,6 +37,8 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 
 	if r.Answer != nil && len(r.Answer) > 0 && r.Answer[0].Header().Rrtype == dns.TypeCNAME {
 		requestCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
+
+		defer recordDuration(ctx, time.Now())
 
 		// emulate hashset in go; https://emersion.fr/blog/2017/sets-in-go/
 		cnameVisited := make(map[string]struct{})
@@ -98,3 +101,8 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 
 // Name implements the Handler interface.
 func (al *Finalize) Name() string { return "finalize" }
+
+func recordDuration(ctx context.Context, start time.Time) {
+	requestDuration.WithLabelValues(metrics.WithServer(ctx)).
+		Observe(time.Since(start).Seconds())
+}

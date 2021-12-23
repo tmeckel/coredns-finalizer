@@ -45,4 +45,12 @@ var upstreamErrorCount = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help:      "Counter of upstream errors received.",
 }, []string{"server"})
 
+var requestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	Namespace: plugin.Namespace,
+	Subsystem: "finalize",
+	Name:      "request_duration_seconds",
+	Buckets:   plugin.TimeBuckets,
+	Help:      "Histogram of the time each request took.",
+}, []string{"server"})
+
 var _ sync.Once

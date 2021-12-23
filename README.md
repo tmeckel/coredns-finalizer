@@ -15,10 +15,11 @@ that case the original (first) answer will be returned to the client as well.
 
 ## Compilation
 
-A simple way to consume this plugin, is by adding the following on [plugin.cfg](https://github.com/coredns/coredns/blob/master/plugin.cfg), 
+A simple way to consume this plugin, is by adding the following on [plugin.cfg](https://github.com/coredns/coredns/blob/master/plugin.cfg) __right after the `cache` plugin__,
 and recompile it as [detailed on coredns.io](https://coredns.io/2017/07/25/compile-time-enabling-or-disabling-plugins/#build-with-compile-time-configuration-file).
 
 ```txt
+# right after cache:cache
 finalize:github.com/tmeckel/coredns-finalizer
 ```
 
@@ -42,7 +43,7 @@ finalize [max_depth MAX]
 ```
 
 * `max_depth` **MAX** to limit the maximum calls to resolve a CNAME chain to the
-    final A or AAAA record, a value `> 0` can be specified. 
+    final A or AAAA record, a value `> 0` can be specified.
 
     If the maximum depth
     is reached and no A or AAAA record could be found, the the original (first)

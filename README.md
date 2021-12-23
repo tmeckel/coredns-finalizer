@@ -2,7 +2,7 @@
 
 ## Name
 
-*finalize* - resolves CNAMES after a query is handled.
+*finalize* - resolves CNAMEs after a query is handled.
 
 ## Description
 
@@ -49,13 +49,13 @@ finalize [max_depth MAX]
 
 ## Metrics
 
-If monitoring is enabled (via the *prometheus* directive) the following metric is exported:
+If monitoring is enabled (via the *prometheus* directive) the following metrics are exported:
 
 * `coredns_finalize_request_count_total{server}` - query count to the *finalize* plugin.
 
 * `coredns_finalize_circular_reference_count_total{server}` - count of detected circular references.
 
-* `coredns_finalize_dangling_cname_count_total{server}` - count of CNAMES that couldn't be resolved.
+* `coredns_finalize_dangling_cname_count_total{server}` - count of CNAMEs that couldn't be resolved.
 
 * `coredns_finalize_maxdepth_reached_count_total{server}` - count of incidents when max depth is reached while trying to resolve a CNAME.
 
@@ -69,7 +69,7 @@ This plugin reports readiness to the ready plugin. It will be immediately ready.
 
 ## Examples
 
-In this configuration, we forward all queries to 9.9.9.9 and resolve CNAMES.
+In this configuration, we forward all queries to 9.9.9.9 and resolve CNAMEs.
 
 ```corefile
 . {
@@ -78,7 +78,7 @@ In this configuration, we forward all queries to 9.9.9.9 and resolve CNAMES.
 }
 ```
 
-In this configuration, we forward all queries to 9.9.9.9 and resolve CNAMES with a maximum search depth of `1`:
+In this configuration, we forward all queries to 9.9.9.9 and resolve CNAMEs with a maximum search depth of `1`:
 
 ```corefile
 . {

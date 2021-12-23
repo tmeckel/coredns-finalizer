@@ -19,7 +19,7 @@ A simple way to consume this plugin, is by adding the following on [plugin.cfg](
 and recompile it as [detailed on coredns.io](https://coredns.io/2017/07/25/compile-time-enabling-or-disabling-plugins/#build-with-compile-time-configuration-file).
 
 ```txt
-finalize:github.com/tmeckel/coredns-finalize
+finalize:github.com/tmeckel/coredns-finalizer
 ```
 
 After this you can compile coredns by:

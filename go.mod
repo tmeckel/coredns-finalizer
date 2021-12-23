@@ -1,4 +1,4 @@
-module github.com/tmeckel/coredns-finalize
+module github.com/tmeckel/coredns-finalizer
 
 go 1.17
 

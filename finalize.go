@@ -31,13 +31,19 @@ func New() *Finalize {
 	return s
 }
 
+type FinalizeLoopKey struct{}
+
 // ServeDNS implements the plugin.Handler interface.
 func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-	log.Debug("Configuring response modifier")
+	_, ok := ctx.Value(FinalizeLoopKey{}).(int)
+	if !ok {
+		log.Debug("Configuring response modifier")
 
-	mw := NewResponseModifier(ctx, s, w)
+		ctx := context.WithValue(ctx, FinalizeLoopKey{}, 1)
+		w = NewResponseModifier(ctx, s, w)
+	}
 
-	return plugin.NextOrFailure(s.Name(), s.Next, ctx, mw, r)
+	return plugin.NextOrFailure(s.Name(), s.Next, ctx, w, r)
 }
 
 // Name implements the Handler interface.
@@ -79,27 +85,34 @@ func (r *ResponseModifier) WriteMsg(res *dns.Msg) error {
 		cnameVisited := make(map[string]struct{})
 		cnt := 0
 		rr := res.Answer[0]
+		answers := []dns.RR{
+			rr,
+		}
+		success := true
 
 	resolveCname:
-		log.Debugf("Trying to resolve CNAME [%+v] via upstream", rr)
+		target := rr.(*dns.CNAME).Target
+		log.Debugf("Trying to resolve CNAME [%+v] via upstream", target)
 
 		if r.plugin.maxDepth > 0 && cnt >= r.plugin.maxDepth {
 			maxDepthReachedCount.WithLabelValues(metrics.WithServer(r.ctx)).Inc()
 
 			log.Errorf("Max depth %d reached for resolving CNAME records", r.plugin.maxDepth)
-		} else if _, ok := cnameVisited[rr.(*dns.CNAME).Target]; ok {
+		} else if _, ok := cnameVisited[target]; ok {
 			circularReferenceCount.WithLabelValues(metrics.WithServer(r.ctx)).Inc()
 
-			log.Errorf("Detected circular reference in CNAME chain. CNAME [%s] already processed", rr.(*dns.CNAME).Target)
+			log.Errorf("Detected circular reference in CNAME chain. CNAME [%s] already processed", target)
 		} else {
-			up, err := r.plugin.upstream.Lookup(r.ctx, state, rr.(*dns.CNAME).Target, state.QType())
+			up, err := r.plugin.upstream.Lookup(r.ctx, state, target, state.QType())
 			if err != nil {
 				upstreamErrorCount.WithLabelValues(metrics.WithServer(r.ctx)).Inc()
+				success = false
 
 				log.Errorf("Failed to lookup CNAME [%+v] from upstream: [%+v]", rr, err)
 			} else {
 				if up.Answer == nil || len(up.Answer) == 0 {
 					danglingCNameCount.WithLabelValues(metrics.WithServer(r.ctx)).Inc()
+					success = false
 
 					log.Errorf("Received no answer from upstream: [%+v]", up)
 				} else {
@@ -107,21 +120,23 @@ func (r *ResponseModifier) WriteMsg(res *dns.Msg) error {
 					switch rr.Header().Rrtype {
 					case dns.TypeCNAME:
 						cnt++
-						cnameVisited[up.Question[0].Name] = struct{}{}
-
+						cnameVisited[target] = struct{}{}
+						answers = append(answers, rr)
 						goto resolveCname
 					case dns.TypeA:
 						fallthrough
 					case dns.TypeAAAA:
-						rr.Header().Name = res.Answer[0].Header().Name
-						res.Answer = []dns.RR{
-							rr,
-						}
+						answers = append(answers, up.Answer...)
 					default:
 						log.Errorf("Upstream server returned unsupported type [%+v] for CNAME question [%+v]", rr, up.Question[0])
+						success = false
 					}
 				}
 			}
+		}
+
+		if success {
+			res.Answer = answers
 		}
 	} else {
 		log.Debug("Request didn't contain any answer or no CNAME")

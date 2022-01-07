@@ -69,7 +69,7 @@ The `server` label indicated which server handled the request.
 
 ## Ready
 
-This plugin reports readiness to the ready plugin. It will be immediately ready.
+This plugin will be immediately ready and thus does not report it's status.
 
 ## Examples
 

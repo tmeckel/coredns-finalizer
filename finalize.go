@@ -37,7 +37,6 @@ type FinalizeLoopKey struct{}
 
 // ServeDNS implements the plugin.Handler interface.
 func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-
 	nw := nonwriter.New(w)
 	rcode, err := plugin.NextOrFailure(s.Name(), s.Next, ctx, nw, r)
 	if err != nil {
@@ -96,6 +95,7 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 						cnt++
 						cnameVisited[target] = struct{}{}
 						answers = append(answers, rr)
+
 						goto resolveCname
 					case dns.TypeA:
 						fallthrough

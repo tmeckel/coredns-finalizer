@@ -1,11 +1,11 @@
 module github.com/tmeckel/coredns-finalizer
 
-go 1.17
+go 1.23.0
 
 require (
 	github.com/coredns/caddy v1.1.1
 	github.com/coredns/coredns v1.8.6
-	github.com/miekg/dns v1.1.43
+	github.com/miekg/dns v1.1.68
 	github.com/prometheus/client_golang v1.11.1
 )
 
@@ -21,9 +21,12 @@ require (
 	github.com/prometheus/client_model v0.2.0 // indirect
 	github.com/prometheus/common v0.31.1 // indirect
 	github.com/prometheus/procfs v0.6.0 // indirect
-	golang.org/x/net v0.7.0 // indirect
-	golang.org/x/sys v0.5.0 // indirect
-	golang.org/x/text v0.7.0 // indirect
+	golang.org/x/mod v0.24.0 // indirect
+	golang.org/x/net v0.40.0 // indirect
+	golang.org/x/sync v0.14.0 // indirect
+	golang.org/x/sys v0.33.0 // indirect
+	golang.org/x/text v0.25.0 // indirect
+	golang.org/x/tools v0.33.0 // indirect
 	google.golang.org/genproto v0.0.0-20210917145530-b395a37504d4 // indirect
 	google.golang.org/grpc v1.41.0 // indirect
 	google.golang.org/protobuf v1.27.1 // indirect

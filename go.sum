@@ -17,6 +17,8 @@ github.com/cncf/udpa/go v0.0.0-20201120205902-5459f2c99403/go.mod h1:WmhPx2Nbnht
 github.com/cncf/xds/go v0.0.0-20210312221358-fbca930ec8ed/go.mod h1:eXthEFrGJvWHgFFCl3hGmgk+/aYT6PnTQLykKQRLhEs=
 github.com/coredns/caddy v1.1.4-0.20250930002214-15135a999495 h1:JFeOmbjLnVRhvmLHyuO3M1pfXWlPWpwkdM8UqXZRtBg=
 github.com/coredns/caddy v1.1.4-0.20250930002214-15135a999495/go.mod h1:A6ntJQlAWuQfFlsd9hvigKbo2WS0VUs2l1e2F+BawD4=
+github.com/coredns/caddy v1.1.4 h1:+Lls5xASB0QsA2jpCroCOwpPlb5GjIGlxdjXxdX0XVo=
+github.com/coredns/caddy v1.1.4/go.mod h1:A6ntJQlAWuQfFlsd9hvigKbo2WS0VUs2l1e2F+BawD4=
 github.com/coredns/coredns v1.13.1 h1:yhYvf/QVwHNjBK65RkC8d9VW91dP9XKem3BOon4eokg=
 github.com/coredns/coredns v1.13.1/go.mod h1:UHmBXdGEn/WQ1jdyMYgOxFh/VklkE//arIAxptwVAZI=
 github.com/coredns/coredns v1.13.2 h1:PPICLK9DBxPC2sGp/tbTL9B4JkyHHIIek9JeWNuIwUw=

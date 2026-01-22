@@ -55,6 +55,52 @@ func (h *captureHandler) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *
 
 func (h *captureHandler) Name() string { return "capture" }
 
+// multiAHandler acts like captureHandler but returns multiple A records for the final target.
+type multiAHandler struct {
+	got []*dns.Msg
+}
+
+func (h *multiAHandler) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	h.got = append(h.got, r.Copy())
+
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Authoritative = true
+
+	switch r.Question[0].Name {
+	case "bar.example.":
+		m.Answer = []dns.RR{
+			&dns.CNAME{
+				Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+				Target: "baz.example.",
+			},
+		}
+	case "baz.example.":
+		m.Answer = []dns.RR{
+			&dns.A{
+				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP("203.0.113.10"),
+			},
+			&dns.A{
+				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP("203.0.113.11"),
+			},
+		}
+	default:
+		m.Answer = []dns.RR{
+			&dns.A{
+				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP("203.0.113.10"),
+			},
+		}
+	}
+
+	_ = w.WriteMsg(m)
+	return dns.RcodeSuccess, nil
+}
+
+func (h *multiAHandler) Name() string { return "multiA" }
+
 // cnameHandler simulates the "next" plugin in the chain. It always returns a response
 // containing a single CNAME so finalize is triggered and must resolve the target.
 type cnameHandler struct{}
@@ -145,6 +191,61 @@ func TestFinalizeFlattensCNAMEs(t *testing.T) {
 	}
 	if !allAnswersType(w.msg.Answer, dns.TypeA) {
 		t.Fatalf("expected only A records in final answer, got: %#v", w.msg.Answer)
+	}
+	for _, rr := range w.msg.Answer {
+		if rr.Header().Name != "foo.example." {
+			t.Fatalf("expected answer name to be foo.example., got %q", rr.Header().Name)
+		}
+	}
+}
+
+func TestFinalizeFlattensMultipleARecords(t *testing.T) {
+	capture := &multiAHandler{}
+	cfg := &dnsserver.Config{
+		Zone:        ".",
+		ListenHosts: []string{""},
+		Port:        "53",
+		Plugin: []plugin.Plugin{
+			func(next plugin.Handler) plugin.Handler {
+				return capture
+			},
+		},
+	}
+	server, err := dnsserver.NewServer("dns://:53", []*dnsserver.Config{cfg})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	finalize := New()
+	finalize.Next = cnameHandler{}
+
+	req := new(dns.Msg)
+	req.SetQuestion("foo.example.", dns.TypeA)
+	req.RecursionDesired = true
+
+	ctx := context.WithValue(context.Background(), dnsserver.Key{}, server)
+	ctx = context.WithValue(ctx, dnsserver.LoopKey{}, 0)
+
+	w := newCaptureResponseWriter()
+	_, err = finalize.ServeDNS(ctx, w, req)
+	if err != nil {
+		t.Fatalf("finalize ServeDNS failed: %v", err)
+	}
+
+	if len(capture.got) != 2 {
+		t.Fatalf("expected two upstream lookups, got %d", len(capture.got))
+	}
+	assertUpstreamQuery(t, capture.got[0], "bar.example.")
+	assertUpstreamQuery(t, capture.got[1], "baz.example.")
+
+	if w.msg == nil {
+		t.Fatal("expected finalize to write a response")
+	}
+	if countRRType(w.msg.Answer, dns.TypeCNAME) != 0 {
+		t.Fatalf("expected no CNAME records in final answer, got: %#v", w.msg.Answer)
+	}
+	if countRRType(w.msg.Answer, dns.TypeA) != 2 {
+		t.Fatalf("expected two A records in final answer, got: %#v", w.msg.Answer)
 	}
 	for _, rr := range w.msg.Answer {
 		if rr.Header().Name != "foo.example." {

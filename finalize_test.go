@@ -114,6 +114,7 @@ func TestFinalizeUsesQueryForUpstreamLookup(t *testing.T) {
 	if capture.got == nil {
 		t.Fatal("expected upstream lookup request, got none")
 	}
+	t.Logf("upstream lookup: qname=%s response=%t answer=%d ns=%d extra=%d", capture.got.Question[0].Name, capture.got.Response, len(capture.got.Answer), len(capture.got.Ns), len(capture.got.Extra))
 	if capture.got.Response {
 		t.Fatalf("expected upstream lookup to be a query, got response")
 	}
@@ -128,6 +129,7 @@ func TestFinalizeUsesQueryForUpstreamLookup(t *testing.T) {
 	if w.msg == nil {
 		t.Fatal("expected finalize to write a response")
 	}
+	t.Logf("final response answers: %#v", w.msg.Answer)
 	if !hasRRType(w.msg.Answer, dns.TypeCNAME) || !hasRRType(w.msg.Answer, dns.TypeA) {
 		t.Fatalf("expected response to contain CNAME and A records, got: %#v", w.msg.Answer)
 	}

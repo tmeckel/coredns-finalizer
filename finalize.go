@@ -37,6 +37,14 @@ type FinalizeLoopKey struct{}
 
 // ServeDNS implements the plugin.Handler interface.
 func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	qname := ""
+	qtype := uint16(0)
+	if r != nil && len(r.Question) > 0 {
+		qname = r.Question[0].Name
+		qtype = r.Question[0].Qtype
+	}
+	log.Debugf("ServeDNS query name=%s type=%s", qname, dns.Type(qtype).String())
+
 	req := r.Copy()
 	origName := ""
 	if len(req.Question) > 0 {
@@ -53,6 +61,8 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 	if r == nil {
 		return 1, fmt.Errorf("no answer received")
 	}
+	log.Debugf("Upstream response rcode=%s answers=%d", dns.RcodeToString[r.Rcode], len(r.Answer))
+
 	if r.Answer != nil && len(r.Answer) > 0 && r.Answer[0].Header().Rrtype == dns.TypeCNAME {
 		log.Debugf("Finalizing CNAME for request: %+v", r)
 
@@ -72,7 +82,7 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 		if origName == "" {
 			origName = target
 		}
-		log.Debugf("Trying to resolve CNAME [%+v] via upstream", target)
+		log.Debugf("Trying to resolve CNAME target=%s type=%s", target, dns.Type(state.QType()).String())
 
 		if s.maxDepth > 0 && cnt >= s.maxDepth {
 			maxDepthReachedCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
@@ -85,6 +95,7 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 		} else {
 			terminal := terminalAnswers(r.Answer)
 			if len(terminal) > 0 {
+				log.Debugf("Using terminal A/AAAA from original answer count=%d", len(terminal))
 				answers = append(answers, flattenAnswers(terminal, origName)...)
 			} else {
 				up, err := s.upstream.Lookup(ctx, state, target, state.QType())
@@ -94,6 +105,12 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 
 					log.Errorf("Failed to lookup CNAME [%+v] from upstream: [%+v]", rr, err)
 				} else {
+					ansCount := 0
+					if up.Answer != nil {
+						ansCount = len(up.Answer)
+					}
+					log.Debugf("Lookup response rcode=%s answers=%d", dns.RcodeToString[up.Rcode], ansCount)
+
 					if up.Answer == nil || len(up.Answer) == 0 {
 						danglingCNameCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
 						success = false
@@ -121,7 +138,12 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 		}
 
 		if success && len(answers) > 0 {
+			log.Debugf("Finalized answer count=%d name=%s", len(answers), origName)
 			r.Answer = answers
+		} else if !success {
+			log.Debugf("Finalization failed; returning original answer")
+		} else {
+			log.Debugf("Finalization produced no answers; returning original answer")
 		}
 	} else {
 		log.Debug("Request didn't contain any answer or no CNAME")

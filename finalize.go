@@ -83,33 +83,38 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 
 			log.Errorf("Detected circular reference in CNAME chain. CNAME [%s] already processed", target)
 		} else {
-			up, err := s.upstream.Lookup(ctx, state, target, state.QType())
-			if err != nil {
-				upstreamErrorCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
-				success = false
-
-				log.Errorf("Failed to lookup CNAME [%+v] from upstream: [%+v]", rr, err)
+			terminal := terminalAnswers(r.Answer)
+			if len(terminal) > 0 {
+				answers = append(answers, flattenAnswers(terminal, origName)...)
 			} else {
-				if up.Answer == nil || len(up.Answer) == 0 {
-					danglingCNameCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
+				up, err := s.upstream.Lookup(ctx, state, target, state.QType())
+				if err != nil {
+					upstreamErrorCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
 					success = false
 
-					log.Errorf("Received no answer from upstream: [%+v]", up)
+					log.Errorf("Failed to lookup CNAME [%+v] from upstream: [%+v]", rr, err)
 				} else {
-					rr = up.Answer[0]
-					switch rr.Header().Rrtype {
-					case dns.TypeCNAME:
-						cnt++
-						cnameVisited[target] = struct{}{}
-
-						goto resolveCname
-					case dns.TypeA:
-						fallthrough
-					case dns.TypeAAAA:
-						answers = append(answers, flattenAnswers(up.Answer, origName)...)
-					default:
-						log.Errorf("Upstream server returned unsupported type [%+v] for CNAME question [%+v]", rr, up.Question[0])
+					if up.Answer == nil || len(up.Answer) == 0 {
+						danglingCNameCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
 						success = false
+
+						log.Errorf("Received no answer from upstream: [%+v]", up)
+					} else {
+						rr = up.Answer[0]
+						switch rr.Header().Rrtype {
+						case dns.TypeCNAME:
+							cnt++
+							cnameVisited[target] = struct{}{}
+
+							goto resolveCname
+						case dns.TypeA:
+							fallthrough
+						case dns.TypeAAAA:
+							answers = append(answers, flattenAnswers(up.Answer, origName)...)
+						default:
+							log.Errorf("Upstream server returned unsupported type [%+v] for CNAME question [%+v]", rr, up.Question[0])
+							success = false
+						}
 					}
 				}
 			}
@@ -132,6 +137,17 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 
 // Name implements the Handler interface.
 func (al *Finalize) Name() string { return "finalize" }
+
+func terminalAnswers(rrs []dns.RR) []dns.RR {
+	terminal := make([]dns.RR, 0, len(rrs))
+	for _, rr := range rrs {
+		switch rr.Header().Rrtype {
+		case dns.TypeA, dns.TypeAAAA:
+			terminal = append(terminal, rr)
+		}
+	}
+	return terminal
+}
 
 func flattenAnswers(rrs []dns.RR, name string) []dns.RR {
 	flattened := make([]dns.RR, 0, len(rrs))

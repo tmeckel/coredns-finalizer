@@ -101,6 +101,34 @@ func (h *multiAHandler) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *d
 
 func (h *multiAHandler) Name() string { return "multiA" }
 
+// terminalAnswerHandler returns an initial response that already includes a CNAME chain
+// and a terminal A record, which finalize should use without upstream lookups.
+type terminalAnswerHandler struct{}
+
+func (h terminalAnswerHandler) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Answer = []dns.RR{
+		&dns.CNAME{
+			Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+			Target: "bar.example.",
+		},
+		&dns.CNAME{
+			Hdr:    dns.RR_Header{Name: "bar.example.", Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+			Target: "baz.example.",
+		},
+		&dns.A{
+			Hdr: dns.RR_Header{Name: "baz.example.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+			A:   net.ParseIP("203.0.113.55"),
+		},
+	}
+
+	_ = w.WriteMsg(m)
+	return dns.RcodeSuccess, nil
+}
+
+func (h terminalAnswerHandler) Name() string { return "terminal" }
+
 // cnameHandler simulates the "next" plugin in the chain. It always returns a response
 // containing a single CNAME so finalize is triggered and must resolve the target.
 type cnameHandler struct{}
@@ -250,6 +278,57 @@ func TestFinalizeFlattensMultipleARecords(t *testing.T) {
 	for _, rr := range w.msg.Answer {
 		if rr.Header().Name != "foo.example." {
 			t.Fatalf("expected answer name to be foo.example., got %q", rr.Header().Name)
+		}
+	}
+}
+
+func TestFinalizeUsesTerminalAnswer(t *testing.T) {
+	cfg := &dnsserver.Config{
+		Zone:        ".",
+		ListenHosts: []string{""},
+		Port:        "53",
+		Plugin: []plugin.Plugin{
+			func(next plugin.Handler) plugin.Handler {
+				return &captureHandler{}
+			},
+		},
+	}
+	server, err := dnsserver.NewServer("dns://:53", []*dnsserver.Config{cfg})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	finalize := New()
+	finalize.Next = terminalAnswerHandler{}
+
+	req := new(dns.Msg)
+	req.SetQuestion("foo.example.", dns.TypeA)
+	req.RecursionDesired = true
+
+	ctx := context.WithValue(context.Background(), dnsserver.Key{}, server)
+	ctx = context.WithValue(ctx, dnsserver.LoopKey{}, 0)
+
+	w := newCaptureResponseWriter()
+	_, err = finalize.ServeDNS(ctx, w, req)
+	if err != nil {
+		t.Fatalf("finalize ServeDNS failed: %v", err)
+	}
+
+	if w.msg == nil {
+		t.Fatal("expected finalize to write a response")
+	}
+	if countRRType(w.msg.Answer, dns.TypeCNAME) != 0 {
+		t.Fatalf("expected no CNAME records in final answer, got: %#v", w.msg.Answer)
+	}
+	if countRRType(w.msg.Answer, dns.TypeA) != 1 {
+		t.Fatalf("expected one A record in final answer, got: %#v", w.msg.Answer)
+	}
+	if got := w.msg.Answer[0].Header().Name; got != "foo.example." {
+		t.Fatalf("expected answer name to be foo.example., got %q", got)
+	}
+	if arec, ok := w.msg.Answer[0].(*dns.A); ok {
+		if arec.A.String() != "203.0.113.55" {
+			t.Fatalf("expected terminal A 203.0.113.55, got %s", arec.A.String())
 		}
 	}
 }

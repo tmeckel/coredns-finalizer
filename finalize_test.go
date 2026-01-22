@@ -12,23 +12,41 @@ import (
 )
 
 // captureHandler acts as the "upstream" handler inside the CoreDNS server used by
-// upstream.Lookup. It records the request it receives and returns a single A record
-// so finalize can append a concrete address to the CNAME chain.
+// upstream.Lookup. It records each request it receives and returns a CNAME or A
+// depending on the name, so the finalize loop resolves a CNAME chain.
 type captureHandler struct {
-	got *dns.Msg
+	got []*dns.Msg
 }
 
 func (h *captureHandler) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-	h.got = r
+	h.got = append(h.got, r.Copy())
 
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
-	m.Answer = []dns.RR{
-		&dns.A{
-			Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-			A:   net.ParseIP("203.0.113.10"),
-		},
+
+	switch r.Question[0].Name {
+	case "bar.example.":
+		m.Answer = []dns.RR{
+			&dns.CNAME{
+				Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+				Target: "baz.example.",
+			},
+		}
+	case "baz.example.":
+		m.Answer = []dns.RR{
+			&dns.A{
+				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP("203.0.113.10"),
+			},
+		}
+	default:
+		m.Answer = []dns.RR{
+			&dns.A{
+				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP("203.0.113.10"),
+			},
+		}
 	}
 
 	_ = w.WriteMsg(m)
@@ -58,7 +76,7 @@ func (h cnameHandler) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns
 func (h cnameHandler) Name() string { return "cname" }
 
 // captureResponseWriter stores the final response written by finalize so the test can
-// assert that CNAME finalization actually happened.
+// assert that CNAME flattening actually happened.
 type captureResponseWriter struct {
 	*plugintest.ResponseWriter
 	msg *dns.Msg
@@ -73,7 +91,7 @@ func (w *captureResponseWriter) WriteMsg(m *dns.Msg) error {
 	return nil
 }
 
-func TestFinalizeUsesQueryForUpstreamLookup(t *testing.T) {
+func TestFinalizeFlattensCNAMEs(t *testing.T) {
 	// Build a minimal CoreDNS server with a single handler. This server is injected into
 	// the context so upstream.Lookup can call back into it as an "upstream".
 	capture := &captureHandler{}
@@ -111,35 +129,65 @@ func TestFinalizeUsesQueryForUpstreamLookup(t *testing.T) {
 	}
 
 	// The upstream lookup must be a proper query (QR=0) with empty sections.
-	if capture.got == nil {
-		t.Fatal("expected upstream lookup request, got none")
+	if len(capture.got) != 2 {
+		t.Fatalf("expected two upstream lookups, got %d", len(capture.got))
 	}
-	t.Logf("upstream lookup: qname=%s response=%t answer=%d ns=%d extra=%d", capture.got.Question[0].Name, capture.got.Response, len(capture.got.Answer), len(capture.got.Ns), len(capture.got.Extra))
-	if capture.got.Response {
-		t.Fatalf("expected upstream lookup to be a query, got response")
-	}
-	if len(capture.got.Answer) != 0 || len(capture.got.Ns) != 0 || len(capture.got.Extra) != 0 {
-		t.Fatalf("expected upstream lookup to have empty answer/authority/additional")
-	}
-	if got := capture.got.Question[0].Name; got != "bar.example." {
-		t.Fatalf("expected upstream lookup to target bar.example., got %q", got)
-	}
+	assertUpstreamQuery(t, capture.got[0], "bar.example.")
+	assertUpstreamQuery(t, capture.got[1], "baz.example.")
 
-	// Verify finalization: the response should include the original CNAME and the resolved A.
+	// Verify flattening: the response should only contain A records for the original name.
 	if w.msg == nil {
 		t.Fatal("expected finalize to write a response")
 	}
 	t.Logf("final response answers: %#v", w.msg.Answer)
-	if !hasRRType(w.msg.Answer, dns.TypeCNAME) || !hasRRType(w.msg.Answer, dns.TypeA) {
-		t.Fatalf("expected response to contain CNAME and A records, got: %#v", w.msg.Answer)
+	if countRRType(w.msg.Answer, dns.TypeCNAME) != 0 {
+		t.Fatalf("expected no CNAME records in final answer, got: %#v", w.msg.Answer)
+	}
+	if !allAnswersType(w.msg.Answer, dns.TypeA) {
+		t.Fatalf("expected only A records in final answer, got: %#v", w.msg.Answer)
+	}
+	for _, rr := range w.msg.Answer {
+		if rr.Header().Name != "foo.example." {
+			t.Fatalf("expected answer name to be foo.example., got %q", rr.Header().Name)
+		}
 	}
 }
 
-func hasRRType(rrs []dns.RR, rrtype uint16) bool {
+func assertUpstreamQuery(t *testing.T, msg *dns.Msg, name string) {
+	t.Helper()
+	if msg == nil {
+		t.Fatal("expected upstream lookup request, got none")
+	}
+	t.Logf("upstream lookup: qname=%s response=%t answer=%d ns=%d extra=%d", msg.Question[0].Name, msg.Response, len(msg.Answer), len(msg.Ns), len(msg.Extra))
+	if msg.Response {
+		t.Fatalf("expected upstream lookup to be a query, got response")
+	}
+	if len(msg.Answer) != 0 || len(msg.Ns) != 0 || len(msg.Extra) != 0 {
+		t.Fatalf("expected upstream lookup to have empty answer/authority/additional")
+	}
+	if got := msg.Question[0].Name; got != name {
+		t.Fatalf("expected upstream lookup to target %s, got %q", name, got)
+	}
+}
+
+func countRRType(rrs []dns.RR, rrtype uint16) int {
+	count := 0
 	for _, rr := range rrs {
 		if rr.Header().Rrtype == rrtype {
-			return true
+			count++
 		}
 	}
-	return false
+	return count
+}
+
+func allAnswersType(rrs []dns.RR, rrtype uint16) bool {
+	if len(rrs) == 0 {
+		return false
+	}
+	for _, rr := range rrs {
+		if rr.Header().Rrtype != rrtype {
+			return false
+		}
+	}
+	return true
 }

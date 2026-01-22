@@ -38,6 +38,11 @@ type FinalizeLoopKey struct{}
 // ServeDNS implements the plugin.Handler interface.
 func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	req := r.Copy()
+	origName := ""
+	if len(req.Question) > 0 {
+		origName = req.Question[0].Name
+	}
+
 	nw := nonwriter.New(w)
 	rcode, err := plugin.NextOrFailure(s.Name(), s.Next, ctx, nw, r)
 	if err != nil {
@@ -59,13 +64,14 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 		cnameVisited := make(map[string]struct{})
 		cnt := 0
 		rr := r.Answer[0]
-		answers := []dns.RR{
-			rr,
-		}
+		answers := []dns.RR{}
 		success := true
 
 	resolveCname:
 		target := rr.(*dns.CNAME).Target
+		if origName == "" {
+			origName = target
+		}
 		log.Debugf("Trying to resolve CNAME [%+v] via upstream", target)
 
 		if s.maxDepth > 0 && cnt >= s.maxDepth {
@@ -95,13 +101,12 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 					case dns.TypeCNAME:
 						cnt++
 						cnameVisited[target] = struct{}{}
-						answers = append(answers, rr)
 
 						goto resolveCname
 					case dns.TypeA:
 						fallthrough
 					case dns.TypeAAAA:
-						answers = append(answers, up.Answer...)
+						answers = append(answers, flattenAnswers(up.Answer, origName)...)
 					default:
 						log.Errorf("Upstream server returned unsupported type [%+v] for CNAME question [%+v]", rr, up.Question[0])
 						success = false
@@ -110,7 +115,7 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 			}
 		}
 
-		if success {
+		if success && len(answers) > 0 {
 			r.Answer = answers
 		}
 	} else {
@@ -127,6 +132,19 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 
 // Name implements the Handler interface.
 func (al *Finalize) Name() string { return "finalize" }
+
+func flattenAnswers(rrs []dns.RR, name string) []dns.RR {
+	flattened := make([]dns.RR, 0, len(rrs))
+	for _, rr := range rrs {
+		switch rr.Header().Rrtype {
+		case dns.TypeA, dns.TypeAAAA:
+			copied := dns.Copy(rr)
+			copied.Header().Name = name
+			flattened = append(flattened, copied)
+		}
+	}
+	return flattened
+}
 
 func recordDuration(ctx context.Context, start time.Time) {
 	requestDuration.WithLabelValues(metrics.WithServer(ctx)).

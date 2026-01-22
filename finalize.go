@@ -37,6 +37,7 @@ type FinalizeLoopKey struct{}
 
 // ServeDNS implements the plugin.Handler interface.
 func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	req := r.Copy()
 	nw := nonwriter.New(w)
 	rcode, err := plugin.NextOrFailure(s.Name(), s.Next, ctx, nw, r)
 	if err != nil {
@@ -53,7 +54,7 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 		requestCount.WithLabelValues(metrics.WithServer(ctx)).Inc()
 		defer recordDuration(ctx, time.Now())
 
-		state := request.Request{W: w, Req: r}
+		state := request.Request{W: w, Req: req}
 		// emulate hashset in go; https://emersion.fr/blog/2017/sets-in-go/
 		cnameVisited := make(map[string]struct{})
 		cnt := 0

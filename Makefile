@@ -27,7 +27,7 @@ test:
 	@echo "==> Executing unit tests..."
 	@go test -tags "all" $(UNITTEST) || exit 1
 	@echo $(UNITTEST) | \
-    		xargs -t -n4 go test -tags "all" $(TESTARGS) -timeout=60s -parallel=4
+    		xargs -t -n4 go test -v -tags "all" $(TESTARGS) -timeout=60s -parallel=4
 
 .PHONY: lint
 lint: tools

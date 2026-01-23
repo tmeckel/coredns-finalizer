@@ -20,8 +20,9 @@ var log = clog.NewWithPlugin("finalize")
 type Finalize struct {
 	Next plugin.Handler
 
-	upstream *upstream.Upstream
-	maxDepth int
+	upstream     *upstream.Upstream
+	maxDepth     int
+	forceResolve bool
 }
 
 func New() *Finalize {
@@ -43,7 +44,7 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 		qname = r.Question[0].Name
 		qtype = r.Question[0].Qtype
 	}
-	log.Debugf("ServeDNS query name=%s type=%s", qname, dns.Type(qtype).String())
+	log.Debugf("ServeDNS query name=%s type=%s force_resolve=%t max_depth=%d", qname, dns.Type(qtype).String(), s.forceResolve, s.maxDepth)
 
 	req := r.Copy()
 	origName := ""
@@ -94,10 +95,13 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 			log.Errorf("Detected circular reference in CNAME chain. CNAME [%s] already processed", target)
 		} else {
 			terminal := terminalAnswers(r.Answer)
-			if len(terminal) > 0 {
+			if len(terminal) > 0 && !s.forceResolve {
 				log.Debugf("Using terminal A/AAAA from original answer count=%d", len(terminal))
 				answers = append(answers, flattenAnswers(terminal, origName)...)
 			} else {
+				if len(terminal) > 0 && s.forceResolve {
+					log.Debugf("force_resolve enabled; ignoring terminal A/AAAA in original answer count=%d", len(terminal))
+				}
 				up, err := s.upstream.Lookup(ctx, state, target, state.QType())
 				if err != nil {
 					upstreamErrorCount.WithLabelValues(metrics.WithServer(ctx)).Inc()

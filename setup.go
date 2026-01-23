@@ -34,14 +34,19 @@ func parse(c *caddy.Controller) (*Finalize, error) {
 	finalizePlugin := New()
 	for c.Next() {
 		args := c.RemainingArgs()
-		switch len(args) {
-		case 0:
-			// do nothing
-		case 1:
-			return nil, c.ArgErr()
-		case 2:
-			if strings.EqualFold("max_depth", args[0]) {
-				n, err := strconv.Atoi(args[1])
+		if len(args) == 0 {
+			continue
+		}
+		for i := 0; i < len(args); {
+			switch strings.ToLower(args[i]) {
+			case "force_resolve":
+				finalizePlugin.forceResolve = true
+				i++
+			case "max_depth":
+				if i+1 >= len(args) {
+					return nil, c.ArgErr()
+				}
+				n, err := strconv.Atoi(args[i+1])
 				if err != nil {
 					return nil, err
 				}
@@ -49,11 +54,10 @@ func parse(c *caddy.Controller) (*Finalize, error) {
 					return nil, fmt.Errorf("max_depth parameter must be greater than 0")
 				}
 				finalizePlugin.maxDepth = n
-			} else {
-				return nil, fmt.Errorf("unsupported parameter %s for upstream setting", args[0])
+				i += 2
+			default:
+				return nil, fmt.Errorf("unsupported parameter %s for finalize setting", args[i])
 			}
-		default:
-			return nil, c.ArgErr()
 		}
 	}
 

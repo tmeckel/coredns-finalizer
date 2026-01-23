@@ -10,6 +10,9 @@ The plugin will try to resolve CNAMEs and only return the resulting A or AAAA
 address. If no A or AAAA record can be resolved the original (first) answer will
 be returned to the client.
 
+If the original answer already includes terminal A or AAAA records, finalize will
+reuse those without additional upstream lookups unless `force_resolve` is enabled.
+
 Circular dependencies are detected and an error will be logged accordingly. In
 that case the original (first) answer will be returned to the client as well.
 
@@ -39,8 +42,12 @@ make
 ## Syntax
 
 ```txt
-finalize [max_depth MAX]
+finalize [force_resolve] [max_depth MAX]
 ```
+
+* `force_resolve` forces CNAME targets to be resolved via upstream lookups even
+    if the original answer already contains terminal A or AAAA records. The
+    `max_depth` limit is still honored.
 
 * `max_depth` **MAX** to limit the maximum calls to resolve a CNAME chain to the
     final A or AAAA record, a value `> 0` can be specified.
@@ -88,6 +95,16 @@ In this configuration, we forward all queries to 9.9.9.9 and resolve CNAMEs with
 . {
   forward . 9.9.9.9
   finalize max_depth 1
+}
+```
+
+In this configuration, we always resolve the CNAME chain via upstream lookups and
+limit the maximum search depth to `2`:
+
+```corefile
+. {
+  forward . 9.9.9.9
+  finalize force_resolve max_depth 2
 }
 ```
 

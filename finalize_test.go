@@ -333,6 +333,67 @@ func TestFinalizeUsesTerminalAnswer(t *testing.T) {
 	}
 }
 
+func TestFinalizeForceResolveIgnoresTerminalAnswer(t *testing.T) {
+	capture := &captureHandler{}
+	cfg := &dnsserver.Config{
+		Zone:        ".",
+		ListenHosts: []string{""},
+		Port:        "53",
+		Plugin: []plugin.Plugin{
+			func(next plugin.Handler) plugin.Handler {
+				return capture
+			},
+		},
+	}
+	server, err := dnsserver.NewServer("dns://:53", []*dnsserver.Config{cfg})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	finalize := New()
+	finalize.forceResolve = true
+	finalize.Next = terminalAnswerHandler{}
+
+	req := new(dns.Msg)
+	req.SetQuestion("foo.example.", dns.TypeA)
+	req.RecursionDesired = true
+
+	ctx := context.WithValue(context.Background(), dnsserver.Key{}, server)
+	ctx = context.WithValue(ctx, dnsserver.LoopKey{}, 0)
+
+	w := newCaptureResponseWriter()
+	_, err = finalize.ServeDNS(ctx, w, req)
+	if err != nil {
+		t.Fatalf("finalize ServeDNS failed: %v", err)
+	}
+
+	if len(capture.got) != 2 {
+		t.Fatalf("expected two upstream lookups, got %d", len(capture.got))
+	}
+	assertUpstreamQuery(t, capture.got[0], "bar.example.")
+	assertUpstreamQuery(t, capture.got[1], "baz.example.")
+
+	if w.msg == nil {
+		t.Fatal("expected finalize to write a response")
+	}
+	if countRRType(w.msg.Answer, dns.TypeCNAME) != 0 {
+		t.Fatalf("expected no CNAME records in final answer, got: %#v", w.msg.Answer)
+	}
+	if countRRType(w.msg.Answer, dns.TypeA) != 1 {
+		t.Fatalf("expected one A record in final answer, got: %#v", w.msg.Answer)
+	}
+	if got := w.msg.Answer[0].Header().Name; got != "foo.example." {
+		t.Fatalf("expected answer name to be foo.example., got %q", got)
+	}
+	if arec, ok := w.msg.Answer[0].(*dns.A); ok {
+		if arec.A.String() != "203.0.113.10" {
+			t.Fatalf("expected upstream A 203.0.113.10, got %s", arec.A.String())
+		}
+	} else {
+		t.Fatalf("expected A record answer, got %T", w.msg.Answer[0])
+	}
+}
+
 func assertUpstreamQuery(t *testing.T, msg *dns.Msg, name string) {
 	t.Helper()
 	if msg == nil {

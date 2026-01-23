@@ -36,4 +36,24 @@ func TestSetup(t *testing.T) {
 	if err := setup(c); err != nil {
 		t.Fatalf("Expected no errors, but got: %v", err)
 	}
+
+	c = caddy.NewTestController("dns", `finalize force_resolve`)
+	if err := setup(c); err != nil {
+		t.Fatalf("Expected no errors, but got: %v", err)
+	}
+
+	c = caddy.NewTestController("dns", `finalize force_resolve max_depth 1`)
+	if err := setup(c); err != nil {
+		t.Fatalf("Expected no errors, but got: %v", err)
+	}
+
+	c = caddy.NewTestController("dns", `finalize max_depth 1 force_resolve`)
+	if err := setup(c); err != nil {
+		t.Fatalf("Expected no errors, but got: %v", err)
+	}
+
+	c = caddy.NewTestController("dns", `finalize force_resolve max_depth`)
+	if err := setup(c); err == nil {
+		t.Fatalf("Expected errors, but got: %v", err)
+	}
 }

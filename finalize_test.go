@@ -394,6 +394,47 @@ func TestFinalizeForceResolveIgnoresTerminalAnswer(t *testing.T) {
 	}
 }
 
+func TestFinalizeSkipsCNAMEQuery(t *testing.T) {
+	finalize := New()
+	finalize.Next = terminalAnswerHandler{}
+
+	req := new(dns.Msg)
+	req.SetQuestion("foo.example.", dns.TypeCNAME)
+	req.RecursionDesired = true
+
+	for i := 0; i < 2; i++ {
+		w := newCaptureResponseWriter()
+		_, err := finalize.ServeDNS(context.Background(), w, req)
+		if err != nil {
+			t.Fatalf("finalize ServeDNS failed: %v", err)
+		}
+
+		if w.msg == nil {
+			t.Fatal("expected finalize to write a response")
+		}
+		if countRRType(w.msg.Answer, dns.TypeCNAME) != 2 {
+			t.Fatalf("expected two CNAME records in answer, got: %#v", w.msg.Answer)
+		}
+		if countRRType(w.msg.Answer, dns.TypeA) != 1 {
+			t.Fatalf("expected one A record in answer, got: %#v", w.msg.Answer)
+		}
+
+		foundA := false
+		for _, rr := range w.msg.Answer {
+			switch rec := rr.(type) {
+			case *dns.A:
+				foundA = true
+				if rec.Header().Name != "baz.example." {
+					t.Fatalf("expected A record name to remain baz.example., got %q", rec.Header().Name)
+				}
+			}
+		}
+		if !foundA {
+			t.Fatalf("expected A record in answer, got: %#v", w.msg.Answer)
+		}
+	}
+}
+
 func assertUpstreamQuery(t *testing.T, msg *dns.Msg, name string) {
 	t.Helper()
 	if msg == nil {
@@ -407,7 +448,7 @@ func assertUpstreamQuery(t *testing.T, msg *dns.Msg, name string) {
 		t.Fatalf("expected upstream lookup to have empty answer/authority/additional")
 	}
 	if got := msg.Question[0].Name; got != name {
-		t.Fatalf("expected upstream lookup to target %s, got %q", name, got)
+		f.Fatalf("expected upstream lookup to target %s, got %q", name, got)
 	}
 }
 

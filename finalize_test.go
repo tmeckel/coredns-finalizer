@@ -448,7 +448,7 @@ func assertUpstreamQuery(t *testing.T, msg *dns.Msg, name string) {
 		t.Fatalf("expected upstream lookup to have empty answer/authority/additional")
 	}
 	if got := msg.Question[0].Name; got != name {
-		f.Fatalf("expected upstream lookup to target %s, got %q", name, got)
+		t.Fatalf("expected upstream lookup to target %s, got %q", name, got)
 	}
 }
 

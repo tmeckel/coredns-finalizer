@@ -64,6 +64,14 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 	}
 	log.Debugf("Upstream response rcode=%s answers=%d", dns.RcodeToString[r.Rcode], len(r.Answer))
 
+	if len(r.Question) > 0 && r.Question[0].Qtype == dns.TypeCNAME {
+		log.Debug("Request is a CNAME type question, skipping")
+		if err := w.WriteMsg(r); err != nil {
+			return 1, err
+		}
+		return 0, nil
+	}
+
 	if len(r.Answer) > 0 && r.Answer[0].Header().Rrtype == dns.TypeCNAME {
 		log.Debugf("Finalizing CNAME for request: %+v", r)
 

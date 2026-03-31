@@ -36,6 +36,17 @@ func New() *Finalize {
 
 type FinalizeLoopKey struct{}
 
+func minTTL(rrs []dns.RR, currentMin uint32) uint32 {
+	min := currentMin
+	for _, rr := range rrs {
+		ttl := rr.Header().Ttl
+		if min == 0 || ttl < min {
+			min = ttl
+		}
+	}
+	return min
+}
+
 // ServeDNS implements the plugin.Handler interface.
 func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	qname := ""
@@ -85,9 +96,14 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 		rr := r.Answer[0]
 		answers := []dns.RR{}
 		success := true
+		minTTLSeen := minTTL(r.Answer, 0)
 
 	resolveCname:
 		target := rr.(*dns.CNAME).Target
+		cnameTTL := rr.Header().Ttl
+		if cnameTTL < minTTLSeen {
+			minTTLSeen = cnameTTL
+		}
 		if origName == "" {
 			origName = target
 		}
@@ -105,7 +121,8 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 			terminal := terminalAnswers(r.Answer)
 			if len(terminal) > 0 && !s.forceResolve {
 				log.Debugf("Using terminal A/AAAA from original answer count=%d", len(terminal))
-				answers = append(answers, flattenAnswers(terminal, origName)...)
+				minTTLSeen = minTTL(r.Answer, minTTLSeen)
+				answers = append(answers, flattenAnswers(terminal, origName, minTTLSeen)...)
 			} else {
 				if len(terminal) > 0 && s.forceResolve {
 					log.Debugf("force_resolve enabled; ignoring terminal A/AAAA in original answer count=%d", len(terminal))
@@ -130,6 +147,7 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 						log.Errorf("Received no answer from upstream: [%+v]", up)
 					} else {
 						rr = up.Answer[0]
+						minTTLSeen = minTTL(up.Answer, minTTLSeen)
 						switch rr.Header().Rrtype {
 						case dns.TypeCNAME:
 							cnt++
@@ -139,7 +157,7 @@ func (s *Finalize) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 						case dns.TypeA:
 							fallthrough
 						case dns.TypeAAAA:
-							answers = append(answers, flattenAnswers(up.Answer, origName)...)
+							answers = append(answers, flattenAnswers(up.Answer, origName, minTTLSeen)...)
 						default:
 							log.Errorf("Upstream server returned unsupported type [%+v] for CNAME question [%+v]", rr, up.Question[0])
 							success = false
@@ -183,13 +201,16 @@ func terminalAnswers(rrs []dns.RR) []dns.RR {
 	return terminal
 }
 
-func flattenAnswers(rrs []dns.RR, name string) []dns.RR {
+func flattenAnswers(rrs []dns.RR, name string, ttl uint32) []dns.RR {
 	flattened := make([]dns.RR, 0, len(rrs))
 	for _, rr := range rrs {
 		switch rr.Header().Rrtype {
 		case dns.TypeA, dns.TypeAAAA:
 			copied := dns.Copy(rr)
 			copied.Header().Name = name
+			if ttl > 0 {
+				copied.Header().Ttl = ttl
+			}
 			flattened = append(flattened, copied)
 		}
 	}

@@ -16,6 +16,35 @@ reuse those without additional upstream lookups unless `force_resolve` is enable
 Circular dependencies are detected and an error will be logged accordingly. In
 that case the original (first) answer will be returned to the client as well.
 
+### TTL Behavior
+
+The finalize plugin uses the **minimum TTL** encountered across the entire CNAME chain
+for the final flattened response. This includes:
+
+- TTL of the initial CNAME record
+- TTL of any intermediate CNAME records in the chain
+- TTL of the terminal A/AAAA record(s)
+
+Using the minimum TTL ensures that clients and caches respect the shortest time-to-live
+value in the chain, which is critical for scenarios involving fast DNS-based failover.
+
+For example, given the following DNS setup:
+
+```
+example.com    CNAME 60s  -> primary.example.com
+primary.example.com  A   3600s -> 192.0.2.1
+```
+
+When `example.com` is queried, the finalize plugin will return:
+
+```
+example.com    A 60s -> 192.0.2.1
+```
+
+The response uses TTL=60s (from the CNAME), not TTL=3600s (from the A record). This allows
+quick failover when the CNAME is repointed to a backup server, without being blocked by
+long-cached A record TTLs.
+
 ## Compilation
 
 A simple way to consume this plugin, is by adding the following on [plugin.cfg](https://github.com/coredns/coredns/blob/master/plugin.cfg) __right after the `cache` plugin__,

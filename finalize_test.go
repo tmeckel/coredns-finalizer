@@ -473,3 +473,241 @@ func allAnswersType(rrs []dns.RR, rrtype uint16) bool {
 	}
 	return true
 }
+
+type ttlAwareCaptureHandler struct {
+	got []*dns.Msg
+}
+
+func (h *ttlAwareCaptureHandler) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	h.got = append(h.got, r.Copy())
+
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Authoritative = true
+
+	switch r.Question[0].Name {
+	case "bar.example.":
+		m.Answer = []dns.RR{
+			&dns.CNAME{
+				Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 300},
+				Target: "baz.example.",
+			},
+		}
+	case "baz.example.":
+		m.Answer = []dns.RR{
+			&dns.A{
+				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+				A:   net.ParseIP("203.0.113.10"),
+			},
+		}
+	default:
+		m.Answer = []dns.RR{
+			&dns.A{
+				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP("203.0.113.10"),
+			},
+		}
+	}
+
+	_ = w.WriteMsg(m)
+	return dns.RcodeSuccess, nil
+}
+
+func (h *ttlAwareCaptureHandler) Name() string { return "ttlAwareCapture" }
+
+type ttlAwareCnameHandler struct {
+	ttl uint32
+}
+
+func (h *ttlAwareCnameHandler) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Answer = []dns.RR{
+		&dns.CNAME{
+			Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: h.ttl},
+			Target: "bar.example.",
+		},
+	}
+
+	_ = w.WriteMsg(m)
+	return dns.RcodeSuccess, nil
+}
+
+func (h *ttlAwareCnameHandler) Name() string { return "ttlAwareCname" }
+
+func TestFinalizeUsesMinimumTTL(t *testing.T) {
+	capture := &ttlAwareCaptureHandler{}
+	cfg := &dnsserver.Config{
+		Zone:        ".",
+		ListenHosts: []string{""},
+		Port:        "53",
+		Plugin: []plugin.Plugin{
+			func(next plugin.Handler) plugin.Handler {
+				return capture
+			},
+		},
+	}
+	server, err := dnsserver.NewServer("dns://:53", []*dnsserver.Config{cfg})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	finalize := New()
+	finalize.Next = &ttlAwareCnameHandler{ttl: 60}
+
+	req := new(dns.Msg)
+	req.SetQuestion("foo.example.", dns.TypeA)
+	req.RecursionDesired = true
+
+	ctx := context.WithValue(context.Background(), dnsserver.Key{}, server)
+	ctx = context.WithValue(ctx, dnsserver.LoopKey{}, 0)
+
+	w := newCaptureResponseWriter()
+	_, err = finalize.ServeDNS(ctx, w, req)
+	if err != nil {
+		t.Fatalf("finalize ServeDNS failed: %v", err)
+	}
+
+	if w.msg == nil {
+		t.Fatal("expected finalize to write a response")
+	}
+	if countRRType(w.msg.Answer, dns.TypeA) != 1 {
+		t.Fatalf("expected one A record, got: %#v", w.msg.Answer)
+	}
+
+	expectedMinTTL := uint32(60)
+	for _, rr := range w.msg.Answer {
+		if rr.Header().Ttl != expectedMinTTL {
+			t.Errorf("expected TTL %d (minimum in chain), got %d", expectedMinTTL, rr.Header().Ttl)
+		}
+	}
+}
+
+type terminalTTLHandler struct{}
+
+func (h terminalTTLHandler) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Answer = []dns.RR{
+		&dns.CNAME{
+			Hdr:    dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 30},
+			Target: "bar.example.",
+		},
+		&dns.CNAME{
+			Hdr:    dns.RR_Header{Name: "bar.example.", Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 300},
+			Target: "baz.example.",
+		},
+		&dns.A{
+			Hdr: dns.RR_Header{Name: "baz.example.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+			A:   net.ParseIP("203.0.113.55"),
+		},
+	}
+
+	_ = w.WriteMsg(m)
+	return dns.RcodeSuccess, nil
+}
+
+func (h terminalTTLHandler) Name() string { return "terminalTTL" }
+
+func TestFinalizeUsesMinimumTTLWithTerminalAnswer(t *testing.T) {
+	cfg := &dnsserver.Config{
+		Zone:        ".",
+		ListenHosts: []string{""},
+		Port:        "53",
+		Plugin: []plugin.Plugin{
+			func(next plugin.Handler) plugin.Handler {
+				return &ttlAwareCaptureHandler{}
+			},
+		},
+	}
+	server, err := dnsserver.NewServer("dns://:53", []*dnsserver.Config{cfg})
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+
+	finalize := New()
+	finalize.Next = terminalTTLHandler{}
+
+	req := new(dns.Msg)
+	req.SetQuestion("foo.example.", dns.TypeA)
+	req.RecursionDesired = true
+
+	ctx := context.WithValue(context.Background(), dnsserver.Key{}, server)
+	ctx = context.WithValue(ctx, dnsserver.LoopKey{}, 0)
+
+	w := newCaptureResponseWriter()
+	_, err = finalize.ServeDNS(ctx, w, req)
+	if err != nil {
+		t.Fatalf("finalize ServeDNS failed: %v", err)
+	}
+
+	if w.msg == nil {
+		t.Fatal("expected finalize to write a response")
+	}
+
+	expectedMinTTL := uint32(30)
+	for _, rr := range w.msg.Answer {
+		if rr.Header().Ttl != expectedMinTTL {
+			t.Errorf("expected TTL %d (minimum in chain), got %d", expectedMinTTL, rr.Header().Ttl)
+		}
+	}
+}
+
+func TestMinTTL(t *testing.T) {
+	tests := []struct {
+		name       string
+		rrs        []dns.RR
+		currentMin uint32
+		expected   uint32
+	}{
+		{
+			name:       "empty rrs returns current min",
+			rrs:        []dns.RR{},
+			currentMin: 100,
+			expected:   100,
+		},
+		{
+			name:       "zero current min with rrs",
+			rrs:        []dns.RR{&dns.A{Hdr: dns.RR_Header{Ttl: 300}}},
+			currentMin: 0,
+			expected:   300,
+		},
+		{
+			name: "returns minimum ttl",
+			rrs: []dns.RR{
+				&dns.A{Hdr: dns.RR_Header{Ttl: 300}},
+				&dns.A{Hdr: dns.RR_Header{Ttl: 60}},
+				&dns.A{Hdr: dns.RR_Header{Ttl: 3600}},
+			},
+			currentMin: 0,
+			expected:   60,
+		},
+		{
+			name: "respects current min if lower",
+			rrs: []dns.RR{
+				&dns.A{Hdr: dns.RR_Header{Ttl: 300}},
+				&dns.A{Hdr: dns.RR_Header{Ttl: 500}},
+			},
+			currentMin: 30,
+			expected:   30,
+		},
+		{
+			name: "updates current min if rrs has lower",
+			rrs: []dns.RR{
+				&dns.A{Hdr: dns.RR_Header{Ttl: 30}},
+				&dns.A{Hdr: dns.RR_Header{Ttl: 500}},
+			},
+			currentMin: 100,
+			expected:   30,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := minTTL(tt.rrs, tt.currentMin)
+			if result != tt.expected {
+				t.Errorf("expected %d, got %d", tt.expected, result)
+			}
+		})
+	}
+}

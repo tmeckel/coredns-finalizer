@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/coredns/caddy v1.1.4
 	github.com/coredns/coredns v1.14.7
-	github.com/miekg/dns v1.1.72
+	github.com/miekg/dns v1.1.73
 	github.com/prometheus/client_golang v1.24.1
 )
 
